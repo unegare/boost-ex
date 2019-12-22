@@ -105,7 +105,7 @@ public:
   }
 
   void OnSend(const boost::system::error_code &ec, std::size_t bytes_transferred) {
-    std::cout << __FUNCTION__ << std::endl;
+    std::cout << __FUNCTION__ << ": bytes_transferred == " << bytes_transferred << std::endl;
     if (ec) {
       m_stdout.lock();
       std::cout << "[" << std::this_thread::get_id() << "] " << __FUNCTION__ << ": " << ec << std::endl;
@@ -117,7 +117,7 @@ public:
   }
 
   void OnRecv(const boost::system::error_code &ec, std::size_t bytes_transferred) {
-    std::cout << __FUNCTION__ << std::endl;
+    std::cout << __FUNCTION__ << ": bytes_transferred == " << bytes_transferred << std::endl;
     if (ec) {
       m_stdout.lock();
       std::cout << "[" << std::this_thread::get_id() << "] " << __FUNCTION__ << ": " << ec << std::endl;
@@ -126,6 +126,9 @@ public:
       m_stdout.lock();
       std::cout << buff->data() << std::endl;
       m_stdout.unlock();
+      boost::system::error_code ec2;
+      sock->shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec2);
+      sock->close();
     }
   }
 };
@@ -152,21 +155,15 @@ int main () {
 
     std::shared_ptr<boost::asio::ip::tcp::socket> sock(std::make_shared<boost::asio::ip::tcp::socket>(*io_context));
     cl = std::make_shared<Client>(io_context, work_guard, sock);
-    m_stdout.lock();
-    std::cout << "HERE: use_count = " << cl.use_count() << std::endl;
-    m_stdout.unlock();
     sock->async_connect(ep, std::bind(std::mem_fn(&Client::OnConnect), cl, std::placeholders::_1));
-    m_stdout.lock();
-    std::cout << "AFTER CALL" << std::endl;
-    m_stdout.unlock();
   } catch (std::exception &ex) {
     m_stdout.lock();
     std::cout << "[" << std::this_thread::get_id() << "] Main Thread: caught an exception: " << ex.what() << std::endl;
     m_stdout.unlock();
   }
   try {
-    char t;
-    std::cin >> t;
+//    char t;
+//    std::cin >> t;
     work_guard->reset();
   } catch (std::exception &ex) {
     m_stdout.lock();
