@@ -95,7 +95,6 @@ public:
       std::cout << "[" << std::this_thread::get_id() << "] " << __FUNCTION__ << ": " << ec << std::endl;
       m_stdout.unlock();
     } else {
-//      buff = std::make_shared<std::array<char, 512>>();
       char req[] = "GET / HTTP/1.1\r\nHost: unegare.info\r\n\r\n";
       memcpy(buff->data(), req, strlen(req));
       m_stdout.lock();
@@ -103,19 +102,16 @@ public:
       m_stdout.unlock();
       sock->async_write_some(boost::asio::buffer(buff->data(), strlen(buff->data())), std::bind(std::mem_fn(&Client::OnSend), this, std::placeholders::_1, std::placeholders::_2));
     }
-    std::cout << __FUNCTION__ << " use_count: " << buff.use_count() << std::endl;
   }
 
   void OnSend(const boost::system::error_code &ec, std::size_t bytes_transferred) {
-    std::cout << __FUNCTION__ << " use_count: " << io_context.use_count() << std::endl;
+    std::cout << __FUNCTION__ << std::endl;
     if (ec) {
       m_stdout.lock();
       std::cout << "[" << std::this_thread::get_id() << "] " << __FUNCTION__ << ": " << ec << std::endl;
       m_stdout.unlock();
     } else {
-    std::cout << __FUNCTION__ << " use_count: " << buff.use_count() << std::endl;
       buff->fill(0);
-    std::cout << __FUNCTION__ << std::endl;
       sock->async_read_some(boost::asio::buffer(buff->data(), buff->size()), std::bind(std::mem_fn(&Client::OnRecv), this, std::placeholders::_1, std::placeholders::_2));
     }
   }
@@ -155,17 +151,14 @@ int main () {
     m_stdout.unlock();
 
     std::shared_ptr<boost::asio::ip::tcp::socket> sock(std::make_shared<boost::asio::ip::tcp::socket>(*io_context));
-    std::shared_ptr<Client> cl2(std::make_shared<Client>(io_context, work_guard, sock));
-    cl = cl2->shared_from_this();
+    cl = std::make_shared<Client>(io_context, work_guard, sock);
     m_stdout.lock();
     std::cout << "HERE: use_count = " << cl.use_count() << std::endl;
     m_stdout.unlock();
-    sock->async_connect(ep, std::bind(std::mem_fn(&Client::OnConnect), *cl2->shared_from_this(), std::placeholders::_1));
-    std::this_thread::sleep_for(std::chrono::duration<double>(1));
+    sock->async_connect(ep, std::bind(std::mem_fn(&Client::OnConnect), cl, std::placeholders::_1));
     m_stdout.lock();
     std::cout << "AFTER CALL" << std::endl;
     m_stdout.unlock();
-//    asm volatile ("");
   } catch (std::exception &ex) {
     m_stdout.lock();
     std::cout << "[" << std::this_thread::get_id() << "] Main Thread: caught an exception: " << ex.what() << std::endl;
@@ -175,9 +168,6 @@ int main () {
     char t;
     std::cin >> t;
     work_guard->reset();
-//    std::this_thread::sleep_for(std::chrono::duration<double>(1));
-//    std::cout << "Running" << std::endl;
-//    io_context->run();
   } catch (std::exception &ex) {
     m_stdout.lock();
     std::cout << "[" << std::this_thread::get_id() << "] Main Thread: caught an exception: " << ex.what() << std::endl;
