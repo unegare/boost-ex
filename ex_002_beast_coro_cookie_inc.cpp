@@ -6,7 +6,7 @@
 #include <memory>
 #include <charconv>
 
-#define BOOST_BEAST_USE_STD_STRING_VIEW
+//#define BOOST_BEAST_USE_STD_STRING_VIEW
 
 #include <boost/format.hpp>
 
@@ -99,18 +99,21 @@ public:
   ~session() {
     BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
     BOOST_LOG(log) << "called";
+    if (sock->is_open()) {
+      boost::system::error_code ec;
+      sock->shutdown(tcp::socket::shutdown_both, ec);
+    }
   }
 
   void start(asio::yield_context yield) {
     BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
 
     boost::system::error_code ec;
-    try {
     for (;;) {
+      BOOST_LOG(log) << "new iter";
       beast::flat_buffer buf;
       http::request<http::string_body> req{};
-//      http::async_read(*sock, buf, req, yield[ec]);
-      http::async_read(*sock, buf, req, yield);
+      http::async_read(*sock, buf, req, yield[ec]);
       if (ec) {
 //        if (ec != asio::error::eof)
         if (ec != http::error::end_of_stream) {
@@ -140,7 +143,7 @@ public:
 
       http::response<http::string_body> res{http::status::ok, req.version()};
       http::fields fs;
-      fs.set(http::field::content_type, R"olo(text/html; charcode=utf-8)olo");
+      fs.set(http::field::content_type, R"olo(text/html; charset=utf-8)olo");
       fs.set(http::field::set_cookie, (boost::format(TRALALA_STR "=%u; SameSite=Strict") % (tralala_int + 1)).str());
       for (const auto& it : fs) {
         res.base().insert(it.name(), it.value());
@@ -159,22 +162,15 @@ public:
         break;
       }
     }
-    } catch (const boost::system::system_error &se) {
-      if (se.code() == http::error::end_of_stream) {
-        sock->shutdown(tcp::socket::shutdown_both, ec);
-      } else {
-        throw;
-      }
-    } catch (...) {
-        throw;
-    }
   }
 
   void stop() {
     BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
     BOOST_LOG(log) << "shutdown...";
-    boost::system::error_code ec;
-    sock->shutdown(tcp::socket::shutdown_both, ec);
+    if (sock->is_open()) {
+      boost::system::error_code ec;
+      sock->shutdown(tcp::socket::shutdown_both, ec);
+    }
     BOOST_LOG(log) << "shutdown done";
   }
 };
@@ -228,8 +224,8 @@ int main() {
   BOOST_LOG(log) << "start";
 
   asio::io_context ioc;
-//  asio::io_context::work _work(ioc);
-  asio::executor_work_guard _work(ioc.get_executor());
+//  auto _work = std::make_shared<asio::io_context::work> (ioc);
+  asio::executor_work_guard _work{asio::make_work_guard(ioc)};
 
   try {
 
@@ -245,6 +241,7 @@ int main() {
 
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](const boost::system::error_code &ec, int signum) {
+      BOOST_LOG_NAMED_SCOPE("signals.async_wait");
       if (!ec) {
         BOOST_LOG(log) << "about to stop ...";
         srv->stop();
