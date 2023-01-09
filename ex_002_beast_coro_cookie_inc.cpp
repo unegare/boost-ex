@@ -6,7 +6,7 @@
 #include <memory>
 #include <charconv>
 
-//#define BOOST_BEAST_USE_STD_STRING_VIEW
+#define BOOST_BEAST_USE_STD_STRING_VIEW
 
 #include <boost/format.hpp>
 
@@ -198,7 +198,7 @@ public:
       }
       auto ss = std::make_shared<session>(log, ioc, sock);
       sss.emplace_back(ss);
-      asio::spawn(ioc.get_executor(), [&, ss](asio::yield_context yield) { ss->start(yield); BOOST_LOG(log) << "END_1"; });
+      asio::spawn(ioc.get_executor(), [srv = shared_from_this(), ss](asio::yield_context yield) { ss->start(yield); BOOST_LOG(srv->log) << "END_1"; });
     }
   }
 
