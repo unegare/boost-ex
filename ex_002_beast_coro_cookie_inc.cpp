@@ -22,6 +22,8 @@
 #include <boost/asio/spawn.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -88,17 +90,21 @@ std::ostream& operator<< (std::ostream& os, const cookies_jar& jar) {
   return os << ss.str();
 }
 
+class service;
+
 class session: public std::enable_shared_from_this<session> {
   logsrc::logger &log;
   asio::io_context &ioc;
+  std::shared_ptr<service> srv;
   std::shared_ptr<tcp::socket> sock;
 public:
-  session(logsrc::logger &log_, asio::io_context &ioc_, std::shared_ptr<tcp::socket> sock_): log{log_}, ioc{ioc_}, sock{sock_} {
+  session(logsrc::logger &log_, asio::io_context &ioc_, std::shared_ptr<service> srv_, std::shared_ptr<tcp::socket> sock_): log{log_}, ioc{ioc_}, srv{srv_}, sock{sock_} {
   }
 
   ~session() {
-    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
+//    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
     BOOST_LOG(log) << "called";
+//    std::cout << "called" << std::endl;
     if (sock->is_open()) {
       boost::system::error_code ec;
       sock->shutdown(tcp::socket::shutdown_both, ec);
@@ -113,14 +119,40 @@ public:
       BOOST_LOG(log) << "new iter";
       beast::flat_buffer buf;
       http::request<http::string_body> req{};
+
+      //------
+
+//      asio::cancellation_signal cancel;
+//      auto cyield = asio::bind_cancellation_slot(cancel.slot(), yield[ec]);
+//
+//      using namespace std::chrono_literals;
+//      std::chrono::steady_clock::duration s_timeout = 1000ms;
+//
+//      asio::steady_timer deadline(get_associated_executor(cyield), s_timeout);
+//      deadline.async_wait([&](boost::system::error_code ec_) {
+//          std::cout << "Timeout: " << ec_.message() << std::endl;
+//          if (!ec_) {
+//              cancel.emit(asio::cancellation_type::terminal);
+//          }
+//      });
+
+      //------
+
+//      http::async_read(*sock, buf, req, cyield);
       http::async_read(*sock, buf, req, yield[ec]);
       if (ec) {
 //        if (ec != asio::error::eof)
-        if (ec != http::error::end_of_stream) {
-          BOOST_LOG(log) << "ERROR: " << ec.message();
+//        if (ec != http::error::end_of_stream) {
+//        std::cout << "READ END ERR" << std::endl;
+//        std::cout << "use_count:" << shared_from_this().use_count() << std::endl;
+          BOOST_LOG(log) << "ERROR (read): " << ec.message();
+//        }
+        if (sock->is_open()) {
+          sock->shutdown(tcp::socket::shutdown_both, ec);
         }
-        sock->shutdown(tcp::socket::shutdown_both, ec);
         break;
+      } else {
+//        std::cout << "READ END OK" << std::endl;
       }
 
       BOOST_LOG(log) << req;
@@ -156,16 +188,19 @@ public:
       if (ec) {
 //        if (ec != asio::error::eof)
         if (ec != http::error::end_of_stream) {
-          BOOST_LOG(log) << "ERROR: " << ec.message();
+          BOOST_LOG(log) << "ERROR (write): " << ec.message();
         }
         sock->shutdown(tcp::socket::shutdown_both, ec);
         break;
       }
     }
+
+//    std::cout << "end" << std::endl;
+    BOOST_LOG(log) << "end";
   }
 
   void stop() {
-    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
+//    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
     BOOST_LOG(log) << "shutdown...";
     if (sock->is_open()) {
       boost::system::error_code ec;
@@ -186,49 +221,82 @@ public:
   }
 
   void start(asio::yield_context yield) {
-    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
+//    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
 
     boost::system::error_code ec;
     for (;;) {
       auto sock = std::make_shared<tcp::socket>(ioc);
       acc.async_accept(*sock, yield[ec]);
       if (ec) {
-        BOOST_LOG(log) << "ERROR: " << ec.message();
+        BOOST_LOG(log) << "ERROR (accept): " << ec.message();
         break;
       }
-      auto ss = std::make_shared<session>(log, ioc, sock);
+      auto ss = std::make_shared<session>(log, ioc, shared_from_this(), sock);
       sss.emplace_back(ss);
-      asio::spawn(ioc.get_executor(), [srv = shared_from_this(), ss](asio::yield_context yield) { ss->start(yield); BOOST_LOG(srv->log) << "END_1"; });
+      asio::spawn(ioc.get_executor(), [srv = shared_from_this(), ss = std::shared_ptr(ss)] (asio::yield_context yield) {
+        try {
+          ss->start(yield);
+//          std::cout << "END_12345" << std::endl;
+        } catch (...) {
+          std::cout << "CAUGHT EXCEPTION" << std::endl;
+        }
+        BOOST_LOG(srv->log) << "END_1";
+//        std::cout << "END_1 std" << std::endl;
+      });
     }
+    BOOST_LOG(log) << "wait ...";
+    {
+      asio::steady_timer t(ioc);
+      t.expires_after(std::chrono::seconds(1));
+      t.wait();
+    }
+//    std::cout << "after wait 1 in start end" << std::endl;
   }
 
   void stop() {
+//    BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
     for (const auto& ss : sss) {
       auto sp = ss.lock();
       if (sp) {
         sp->stop();
       }
     }
+    {
+      asio::steady_timer t(ioc);
+      t.expires_after(std::chrono::seconds(1));
+      t.wait();
+    }
+    BOOST_LOG(log) << "acc.close() ...";
     acc.close();
+    BOOST_LOG(log) << "acc.close() ... done";
+    {
+      asio::steady_timer t(ioc);
+      t.expires_after(std::chrono::seconds(1));
+      t.wait();
+    }
+    BOOST_LOG(log) << "stop ... end";
   }
 };
 
 int main() {
-  BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
+//  BOOST_LOG_NAMED_SCOPE(__PRETTY_FUNCTION__);
   logging::add_console_log(std::clog, logkeywords::format = "[%TimeStamp%] [%Scope%]: %Message%");
   logging::add_common_attributes();
-  logging::core::get()->add_thread_attribute("Scope", logattrs::named_scope());
+//  !!!!!!!!!!!!!!
+//  boost::log::attributes::named_scope is not compatible with boost::coroutine and boost::context
+//  even all BOOST_LOG_NAMED_SCOPE must be commented out
+//  !!!!!!!!!!!!!!
+//  logging::core::get()->add_thread_attribute("Scope", logattrs::named_scope());
 
   logsrc::logger log;
 
   BOOST_LOG(log) << "start";
 
   asio::io_context ioc;
-//  auto _work = std::make_shared<asio::io_context::work> (ioc);
-  asio::executor_work_guard _work{asio::make_work_guard(ioc)};
+  auto _work = std::make_shared<asio::io_context::work> (ioc);
+//  asio::executor_work_guard _work{asio::make_work_guard(ioc)};
 
   try {
-
     tcp::endpoint ep(tcp::v4(), 8080);
     tcp::acceptor acc(ioc);
     acc.open(ep.protocol());
@@ -237,10 +305,10 @@ int main() {
     acc.listen();
 
     auto srv = std::make_shared<service>(log, ioc, acc);
-    asio::spawn(ioc.get_executor(), [srv](asio::yield_context yield){ srv->start(yield); });
+    asio::spawn(ioc.get_executor(), [&, srv](asio::yield_context yield){ try { srv->start(yield); BOOST_LOG(log) << "srv->start ended"; } catch (...) { std::cout << "srv->start() threw an error" << std::endl; } });
 
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
-    signals.async_wait([&](const boost::system::error_code &ec, int signum) {
+    signals.async_wait([&, srv](const boost::system::error_code &ec, int signum) {
       BOOST_LOG_NAMED_SCOPE("signals.async_wait");
       if (!ec) {
         BOOST_LOG(log) << "about to stop ...";
@@ -255,5 +323,6 @@ int main() {
     BOOST_LOG(log) << "MAIN ERROR: " << ex.what();
     ioc.stop();
   }
+//  std::cout << "out" << std::endl;
   return 0;
 }
